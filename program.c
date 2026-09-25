@@ -1,35 +1,57 @@
 #include <stdio.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <stdlib.h>
-#include <fcntl.h>
-#include <string.h>
-#include <signal.h>
-#include <sys/file.h>
-#include <limits.h>
+#include <unistd.h>          // fork(), access(), read(), write(), sleep(), execl()
+#include <sys/types.h>       // pid_t
+#include <sys/wait.h>        // waitpid(), WIFEXITED(), WEXITSTATUS()
+#include <stdlib.h>          // exit(), atol()
+#include <fcntl.h>           // open()
+#include <string.h>          // strcpy(), memset(), strlen(), strstr(), strtok()
+#include <signal.h>          // signal(), SIGTERM, kill()
+#include <sys/file.h>        // flock()
+#include <limits.h>          // PATH_MAX
 #include <errno.h>
 
+
+/* ============================================================
+   FIFO NAMES
+   Named pipes are used for communication between agents.
+   ============================================================ */
 
 #define FIFO_GENERATOR "fifo/generator_to_executor"
 #define FIFO_REVIEWER "fifo/executor_to_reviewer"
 #define FIFO_TESTER "fifo/reviewer_to_tester"
+
+
+/* ============================================================
+   RESTRICTED WORKSPACE
+   ============================================================ */
 
 #define WORKSPACE "workspace"
 #define INPUT_DIR "workspace/input"
 #define OUTPUT_DIR "workspace/output"
 #define BACKUP_DIR "workspace/backup"
 
+
+/* ============================================================
+   ACTIVITY LOG
+   ============================================================ */
+
 #define LOG_FILE "logs/agent_activity.log"
 
-#define MEMORY_LIMIT 50000
-#define CPU_LIMIT 1000
+
+/* ============================================================
+   RESOURCE LIMITS
+   ============================================================ */
+
+#define MEMORY_LIMIT 50000       // 50000 KB
+#define CPU_LIMIT 1000           // 1000 CPU ticks
+
 
 void log_activity(const char *agent, const char *activity);
 
 
 /* ============================================================
    STRUCTURED MESSAGE
+   This structure is transferred between agents through FIFOs.
    ============================================================ */
 
 typedef struct
@@ -49,6 +71,12 @@ typedef struct
 
 void log_activity(const char *agent, const char *activity)
 {
+    /*
+       open()
+       System call used to open/create the activity log file.
+       O_APPEND ensures new entries are added at the end.
+    */
+
     int fd = open(LOG_FILE,
                   O_WRONLY | O_CREAT | O_APPEND,
                   0644);
@@ -68,7 +96,18 @@ void log_activity(const char *agent, const char *activity)
                           getpid(),
                           activity);
 
+    /*
+       write()
+       System call used to write the activity information
+       into the log file.
+    */
+
     write(fd, log_entry, length);
+
+    /*
+       close()
+       Closes the file descriptor after logging.
+    */
 
     close(fd);
 }
@@ -83,6 +122,14 @@ int validate_workspace_path(const char *filename)
     char workspace_path[PATH_MAX];
     char requested_path[PATH_MAX];
 
+
+    /*
+       realpath()
+       Converts a path into its absolute/canonical path.
+       It is used to check whether the requested file
+       belongs to the restricted workspace.
+    */
+
     if (realpath(WORKSPACE, workspace_path) == NULL)
     {
         perror("Workspace path error");
@@ -95,7 +142,15 @@ int validate_workspace_path(const char *filename)
         return 0;
     }
 
+
     size_t workspace_length = strlen(workspace_path);
+
+
+    /*
+       strcmp/strncmp logic:
+       Check whether the requested file path starts
+       inside the allowed workspace path.
+    */
 
     if (strncmp(requested_path,
                 workspace_path,
@@ -124,12 +179,26 @@ int validate_workspace_path(const char *filename)
 
 int validate_file(const char *filename)
 {
+    /*
+       First check whether the requested path belongs
+       to the restricted workspace.
+    */
+
     if (!validate_workspace_path(filename))
     {
         log_activity("Main Controller",
                      "Unauthorized file access rejected");
+
         return 0;
     }
+
+
+    /*
+       access()
+       System call used to check:
+       F_OK -> whether file exists
+       R_OK -> whether file can be read
+    */
 
     if (access(filename, F_OK) == 0 &&
         access(filename, R_OK) == 0)
@@ -169,11 +238,29 @@ int backup_file(const char *source)
 
     filename++;
 
+
+    /*
+       Create the backup filename.
+
+       Example:
+       workspace/input/factorial.c
+
+       becomes:
+
+       workspace/backup/factorial.c.bak
+    */
+
     snprintf(backup_path,
              sizeof(backup_path),
              "%s/%s.bak",
              BACKUP_DIR,
              filename);
+
+
+    /*
+       open()
+       Opens the original workspace file for reading.
+    */
 
     int source_fd = open(source, O_RDONLY);
 
@@ -183,6 +270,16 @@ int backup_file(const char *source)
         return 0;
     }
 
+
+    /*
+       open()
+       Creates/opens the backup file.
+
+       O_CREAT -> create if it doesn't exist
+       O_TRUNC -> clear previous contents
+       O_WRONLY -> write only
+    */
+
     int backup_fd = open(backup_path,
                          O_WRONLY | O_CREAT | O_TRUNC,
                          0644);
@@ -190,12 +287,24 @@ int backup_file(const char *source)
     if (backup_fd == -1)
     {
         perror("Backup file creation failed");
+
         close(source_fd);
+
         return 0;
     }
 
+
     char buffer[1024];
     ssize_t bytes_read;
+
+
+    /*
+       read()
+       Reads data from the original file.
+
+       write()
+       Copies the data into the backup file.
+    */
 
     while ((bytes_read = read(source_fd,
                               buffer,
@@ -224,8 +333,10 @@ int backup_file(const char *source)
         }
     }
 
+
     close(source_fd);
     close(backup_fd);
+
 
     printf("Backup created: %s\n", backup_path);
 
@@ -246,11 +357,18 @@ int synchronize_file(const char *filename)
     printf("FILE SYNCHRONIZATION\n");
     printf("========================================\n");
 
+
     if (!validate_workspace_path(filename))
     {
         printf("Synchronization denied.\n");
         return 0;
     }
+
+
+    /*
+       open()
+       Opens the workspace file for protected access.
+    */
 
     int fd = open(filename, O_RDWR);
 
@@ -262,27 +380,50 @@ int synchronize_file(const char *filename)
 
     printf("Requesting lock for: %s\n", filename);
 
+
+    /*
+       flock()
+       Linux system call used for file synchronization.
+
+       LOCK_EX = exclusive lock
+
+       This prevents multiple agents from performing
+       the protected operation at the same time.
+    */
+
     if (flock(fd, LOCK_EX) == -1)
     {
         perror("File lock failed");
+
         close(fd);
+
         return 0;
     }
+
 
     printf("Exclusive file lock acquired.\n");
     printf("Only one agent can access the file now.\n");
 
+
     printf("Creating backup before protected operation...\n");
+
 
     if (!backup_file(filename))
     {
         printf("Backup failed. Protected operation cancelled.\n");
 
+        /*
+           LOCK_UN
+           Releases the file lock.
+        */
+
         flock(fd, LOCK_UN);
+
         close(fd);
 
         return 0;
     }
+
 
     printf("Performing protected file operation...\n");
 
@@ -290,10 +431,18 @@ int synchronize_file(const char *filename)
 
     printf("Protected file operation completed.\n");
 
+
+    /*
+       flock(LOCK_UN)
+       Releases the exclusive file lock.
+    */
+
     if (flock(fd, LOCK_UN) == -1)
     {
         perror("File unlock failed");
+
         close(fd);
+
         return 0;
     }
 
@@ -325,6 +474,12 @@ void handle_signal(int signal_number)
         log_activity("Execution Agent",
                      "Execution Agent terminated due to resource limit");
 
+
+        /*
+           _exit()
+           Terminates the current process immediately.
+        */
+
         _exit(2);
     }
 }
@@ -345,6 +500,15 @@ void code_generator()
 
     sleep(2);
 
+
+    /*
+       open()
+       Opens the named FIFO for writing.
+
+       FIFO:
+       generator_to_executor
+    */
+
     int fd = open(FIFO_GENERATOR, O_WRONLY);
 
     if (fd == -1)
@@ -358,7 +522,9 @@ void code_generator()
     }
 
 
-    /* Structured task information */
+    /*
+       Create structured task information.
+    */
 
     TaskMessage message;
 
@@ -370,6 +536,12 @@ void code_generator()
     strcpy(message.status, "SUCCESS");
     strcpy(message.result, "Code generated successfully");
 
+
+    /*
+       write()
+       Sends the structured TaskMessage through
+       the named FIFO to the Execution Agent.
+    */
 
     write(fd, &message, sizeof(message));
 
@@ -395,6 +567,14 @@ void code_generator()
 
 void execution_agent()
 {
+    /*
+       signal()
+       Registers the SIGTERM signal handler.
+
+       If the resource monitor sends SIGTERM,
+       handle_signal() will execute.
+    */
+
     signal(SIGTERM, handle_signal);
 
     printf("\n[Execution Agent]\n");
@@ -405,9 +585,10 @@ void execution_agent()
                  "Execution Agent started");
 
 
-    /* --------------------------------------------------------
-       RECEIVE STRUCTURED MESSAGE
-       -------------------------------------------------------- */
+    /*
+       open()
+       Opens the Generator FIFO for reading.
+    */
 
     int fd_read = open(FIFO_GENERATOR, O_RDONLY);
 
@@ -421,9 +602,17 @@ void execution_agent()
         exit(1);
     }
 
+
     TaskMessage message;
 
     memset(&message, 0, sizeof(message));
+
+
+    /*
+       read()
+       Receives the structured TaskMessage
+       from the Code Generator Agent.
+    */
 
     ssize_t bytes =
         read(fd_read,
@@ -431,6 +620,7 @@ void execution_agent()
              sizeof(message));
 
     close(fd_read);
+
 
     if (bytes != sizeof(message))
     {
@@ -442,7 +632,9 @@ void execution_agent()
         exit(1);
     }
 
+
     printf("\nStructured Task Information Received:\n");
+
     printf("Agent  : %s\n", message.agent);
     printf("Task   : %s\n", message.task);
     printf("File   : %s\n", message.file);
@@ -453,9 +645,9 @@ void execution_agent()
                  "Structured task information received");
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        FILE ACCESS VALIDATION
-       -------------------------------------------------------- */
+       ======================================================== */
 
     printf("\nChecking requested workspace file...\n");
 
@@ -470,9 +662,9 @@ void execution_agent()
     }
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        FILE SYNCHRONIZATION + BACKUP
-       -------------------------------------------------------- */
+       ======================================================== */
 
     if (!synchronize_file(message.file))
     {
@@ -485,14 +677,22 @@ void execution_agent()
     }
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        COMPILE PROGRAM
-       -------------------------------------------------------- */
+       ======================================================== */
 
     printf("\nCompiling factorial.c...\n");
 
     log_activity("Execution Agent",
                  "Compilation started");
+
+
+    /*
+       fork()
+       Creates a child process.
+
+       The child will run GCC.
+    */
 
     pid_t compiler_pid = fork();
 
@@ -506,8 +706,17 @@ void execution_agent()
         exit(1);
     }
 
+
     if (compiler_pid == 0)
     {
+        /*
+           execlp()
+           Replaces this child process with the GCC compiler.
+
+           gcc workspace/input/factorial.c
+               -o workspace/output/factorial
+        */
+
         execlp("gcc",
                "gcc",
                message.file,
@@ -520,11 +729,19 @@ void execution_agent()
         _exit(1);
     }
 
+
+    /*
+       waitpid()
+       Parent waits for the compiler child process
+       to finish.
+    */
+
     int compiler_status;
 
     waitpid(compiler_pid,
             &compiler_status,
             0);
+
 
     if (WIFEXITED(compiler_status) &&
         WEXITSTATUS(compiler_status) == 0)
@@ -545,9 +762,9 @@ void execution_agent()
     }
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        EXECUTE PROGRAM
-       -------------------------------------------------------- */
+       ======================================================== */
 
     printf("\nExecuting factorial program...\n");
 
@@ -555,6 +772,13 @@ void execution_agent()
                  "Program execution started");
 
     sleep(2);
+
+
+    /*
+       fork()
+       Creates another child process for running
+       the compiled factorial program.
+    */
 
     pid_t program_pid = fork();
 
@@ -568,8 +792,15 @@ void execution_agent()
         exit(1);
     }
 
+
     if (program_pid == 0)
     {
+        /*
+           execl()
+           Replaces the child process with the
+           compiled factorial program.
+        */
+
         execl("./workspace/output/factorial",
               "./workspace/output/factorial",
               NULL);
@@ -579,11 +810,18 @@ void execution_agent()
         _exit(1);
     }
 
+
+    /*
+       waitpid()
+       Parent waits for the factorial program to finish.
+    */
+
     int program_status;
 
     waitpid(program_pid,
             &program_status,
             0);
+
 
     if (WIFEXITED(program_status) &&
         WEXITSTATUS(program_status) == 0)
@@ -604,9 +842,14 @@ void execution_agent()
     }
 
 
-    /* --------------------------------------------------------
-       SEND STRUCTURED EXECUTION RESULT
-       -------------------------------------------------------- */
+    /* ========================================================
+       SEND EXECUTION RESULT TO REVIEW AGENT
+       ======================================================== */
+
+    /*
+       open()
+       Opens the second FIFO for writing.
+    */
 
     int fd_write = open(FIFO_REVIEWER, O_WRONLY);
 
@@ -620,6 +863,7 @@ void execution_agent()
         exit(1);
     }
 
+
     TaskMessage result;
 
     memset(&result, 0, sizeof(result));
@@ -628,9 +872,16 @@ void execution_agent()
     strcpy(result.task, "Execute Program");
     strcpy(result.file, "workspace/input/factorial.c");
     strcpy(result.status, "SUCCESS");
+
     strcpy(result.result,
            "factorial.c compiled and executed successfully");
 
+
+    /*
+       write()
+       Sends structured execution information
+       to the Code Review Agent.
+    */
 
     write(fd_write,
           &result,
@@ -666,9 +917,10 @@ void code_review_agent()
                  "Code Review Agent started");
 
 
-    /* --------------------------------------------------------
-       RECEIVE STRUCTURED EXECUTION RESULT
-       -------------------------------------------------------- */
+    /*
+       open()
+       Opens the Execution-to-Reviewer FIFO for reading.
+    */
 
     int fd_read = open(FIFO_REVIEWER, O_RDONLY);
 
@@ -682,9 +934,16 @@ void code_review_agent()
         exit(1);
     }
 
+
     TaskMessage result;
 
     memset(&result, 0, sizeof(result));
+
+
+    /*
+       read()
+       Receives structured execution information.
+    */
 
     ssize_t bytes =
         read(fd_read,
@@ -692,6 +951,7 @@ void code_review_agent()
              sizeof(result));
 
     close(fd_read);
+
 
     if (bytes != sizeof(result))
     {
@@ -703,7 +963,9 @@ void code_review_agent()
         exit(1);
     }
 
+
     printf("\nStructured Execution Information Received:\n");
+
     printf("Agent  : %s\n", result.agent);
     printf("Task   : %s\n", result.task);
     printf("File   : %s\n", result.file);
@@ -714,9 +976,9 @@ void code_review_agent()
                  "Structured execution result received");
 
 
-    /* --------------------------------------------------------
-       REVIEW CODE
-       -------------------------------------------------------- */
+    /* ========================================================
+       CODE REVIEW
+       ======================================================== */
 
     printf("\nReviewing code...\n");
 
@@ -732,9 +994,14 @@ void code_review_agent()
                  "Code review completed successfully");
 
 
-    /* --------------------------------------------------------
-       SEND STRUCTURED REVIEW RESULT
-       -------------------------------------------------------- */
+    /* ========================================================
+       SEND REVIEW RESULT TO TESTING AGENT
+       ======================================================== */
+
+    /*
+       open()
+       Opens the third FIFO for writing.
+    */
 
     int fd_write = open(FIFO_TESTER, O_WRONLY);
 
@@ -748,6 +1015,7 @@ void code_review_agent()
         exit(1);
     }
 
+
     TaskMessage review;
 
     memset(&review, 0, sizeof(review));
@@ -756,9 +1024,15 @@ void code_review_agent()
     strcpy(review.task, "Review Code");
     strcpy(review.file, "workspace/input/factorial.c");
     strcpy(review.status, "SUCCESS");
+
     strcpy(review.result,
            "Code review passed and ready for testing");
 
+
+    /*
+       write()
+       Sends review result to Testing Agent.
+    */
 
     write(fd_write,
           &review,
@@ -794,9 +1068,10 @@ void testing_agent()
                  "Testing Agent started");
 
 
-    /* --------------------------------------------------------
-       RECEIVE STRUCTURED REVIEW
-       -------------------------------------------------------- */
+    /*
+       open()
+       Opens the Tester FIFO for reading.
+    */
 
     int fd = open(FIFO_TESTER, O_RDONLY);
 
@@ -810,9 +1085,16 @@ void testing_agent()
         exit(1);
     }
 
+
     TaskMessage review;
 
     memset(&review, 0, sizeof(review));
+
+
+    /*
+       read()
+       Receives the review result.
+    */
 
     ssize_t bytes =
         read(fd,
@@ -820,6 +1102,7 @@ void testing_agent()
              sizeof(review));
 
     close(fd);
+
 
     if (bytes != sizeof(review))
     {
@@ -831,7 +1114,9 @@ void testing_agent()
         exit(1);
     }
 
+
     printf("\nStructured Review Information Received:\n");
+
     printf("Agent  : %s\n", review.agent);
     printf("Task   : %s\n", review.task);
     printf("File   : %s\n", review.file);
@@ -842,14 +1127,21 @@ void testing_agent()
                  "Structured review result received");
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        RUN ACTUAL TEST
-       -------------------------------------------------------- */
+       ======================================================== */
 
     printf("\nRunning actual test...\n");
 
     log_activity("Testing Agent",
                  "Testing started");
+
+
+    /*
+       popen()
+       Opens a process and allows the Testing Agent
+       to read the program's output.
+    */
 
     FILE *process;
 
@@ -857,6 +1149,7 @@ void testing_agent()
 
     process = popen("./workspace/output/factorial",
                     "r");
+
 
     if (process == NULL)
     {
@@ -868,6 +1161,12 @@ void testing_agent()
         exit(1);
     }
 
+
+    /*
+       fgets()
+       Reads the output produced by the factorial program.
+    */
+
     if (fgets(output,
               sizeof(output),
               process) != NULL)
@@ -875,19 +1174,27 @@ void testing_agent()
         printf("Program output: %s", output);
     }
 
+
+    /*
+       pclose()
+       Closes the process opened using popen().
+    */
+
     int status = pclose(process);
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        CHECK EXPECTED RESULT
-       -------------------------------------------------------- */
+       ======================================================== */
 
     if (strstr(output,
                "Factorial of 5 = 120") != NULL &&
         status == 0)
     {
         printf("\nTEST RESULT: PASS\n");
+
         printf("Expected: Factorial of 5 = 120\n");
+
         printf("Actual:   %s", output);
 
         log_activity("Testing Agent",
@@ -896,7 +1203,9 @@ void testing_agent()
     else
     {
         printf("\nTEST RESULT: FAIL\n");
+
         printf("Expected: Factorial of 5 = 120\n");
+
         printf("Actual:   %s", output);
 
         log_activity("Testing Agent",
@@ -922,6 +1231,16 @@ void monitor_process(pid_t pid)
     char status_path[100];
     char stat_path[100];
 
+
+    /*
+       /proc/<PID>/status
+       Linux virtual file containing process information,
+       including memory usage.
+
+       /proc/<PID>/stat
+       Contains process CPU statistics.
+    */
+
     snprintf(status_path,
              sizeof(status_path),
              "/proc/%d/status",
@@ -932,6 +1251,7 @@ void monitor_process(pid_t pid)
              "/proc/%d/stat",
              pid);
 
+
     printf("\n========================================\n");
     printf("RESOURCE MONITOR\n");
     printf("Monitoring Agent PID: %d\n", pid);
@@ -939,14 +1259,22 @@ void monitor_process(pid_t pid)
     printf("CPU Limit: %d ticks\n", CPU_LIMIT);
     printf("========================================\n");
 
+
     log_activity("Resource Monitor",
                  "Resource monitoring started");
 
 
     for (int i = 0; i < 5; i++)
     {
+        /*
+           fopen()
+           Opens the /proc status file to read
+           memory information.
+        */
+
         FILE *status_file =
             fopen(status_path, "r");
+
 
         if (status_file == NULL)
         {
@@ -959,9 +1287,15 @@ void monitor_process(pid_t pid)
             break;
         }
 
+
         char line[256];
 
         long memory = 0;
+
+
+        /*
+           Read /proc/<PID>/status line by line.
+        */
 
         while (fgets(line,
                      sizeof(line),
@@ -982,9 +1316,14 @@ void monitor_process(pid_t pid)
         fclose(status_file);
 
 
-        /* ----------------------------------------------------
-           CPU TIME
-           ---------------------------------------------------- */
+        /* ====================================================
+           CPU MONITORING
+           ==================================================== */
+
+        /*
+           fopen()
+           Opens /proc/<PID>/stat.
+        */
 
         FILE *stat_file =
             fopen(stat_path, "r");
@@ -992,9 +1331,11 @@ void monitor_process(pid_t pid)
         long utime = 0;
         long stime = 0;
 
+
         if (stat_file != NULL)
         {
             char buffer[2048];
+
 
             if (fgets(buffer,
                       sizeof(buffer),
@@ -1002,6 +1343,7 @@ void monitor_process(pid_t pid)
             {
                 char *closing_bracket =
                     strrchr(buffer, ')');
+
 
                 if (closing_bracket != NULL)
                 {
@@ -1012,6 +1354,12 @@ void monitor_process(pid_t pid)
 
                     char *token =
                         strtok(fields, " ");
+
+
+                    /*
+                       Extract CPU user time and system time
+                       from /proc/<PID>/stat.
+                    */
 
                     while (token != NULL)
                     {
@@ -1027,6 +1375,7 @@ void monitor_process(pid_t pid)
                         }
 
                         token = strtok(NULL, " ");
+
                         field++;
                     }
                 }
@@ -1034,6 +1383,7 @@ void monitor_process(pid_t pid)
 
             fclose(stat_file);
         }
+
 
         long cpu_time =
             utime + stime;
@@ -1049,17 +1399,24 @@ void monitor_process(pid_t pid)
                cpu_time);
 
 
-        /* ----------------------------------------------------
+        /* ====================================================
            MEMORY LIMIT
-           ---------------------------------------------------- */
+           ==================================================== */
 
         if (memory > MEMORY_LIMIT)
         {
             printf("\nWARNING: Memory limit exceeded!\n");
             printf("Sending SIGTERM to Execution Agent...\n");
 
+
             log_activity("Resource Monitor",
                          "Memory limit exceeded - SIGTERM sent");
+
+
+            /*
+               kill()
+               Sends SIGTERM to the Execution Agent.
+            */
 
             kill(pid, SIGTERM);
 
@@ -1067,25 +1424,34 @@ void monitor_process(pid_t pid)
         }
 
 
-        /* ----------------------------------------------------
+        /* ====================================================
            CPU LIMIT
-           ---------------------------------------------------- */
+           ==================================================== */
 
         if (cpu_time > CPU_LIMIT)
         {
             printf("\nWARNING: CPU limit exceeded!\n");
             printf("Sending SIGTERM to Execution Agent...\n");
 
+
             log_activity("Resource Monitor",
                          "CPU limit exceeded - SIGTERM sent");
+
+
+            /*
+               kill()
+               Sends SIGTERM to the monitored process.
+            */
 
             kill(pid, SIGTERM);
 
             break;
         }
 
+
         sleep(1);
     }
+
 
     printf("\nResource monitoring completed.\n");
 
@@ -1095,70 +1461,79 @@ void monitor_process(pid_t pid)
 
 
 /* ============================================================
-   MAIN CONTROLLER
+   RUN COMPLETE MULTI-AGENT SYSTEM
    ============================================================ */
 
-int main()
+void run_multi_agent_system()
 {
-    printf("========================================\n");
-    printf("     MULTI-AGENT AI EXECUTION SYSTEM\n");
+    printf("\n========================================\n");
+    printf("     STARTING MULTI-AGENT SYSTEM\n");
     printf("========================================\n");
 
-    printf("\nMain Controller Started\n");
 
     log_activity("Main Controller",
-                 "Main Controller started");
+                 "Multi-Agent System execution started");
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        CHECK REQUIRED DIRECTORIES
-       -------------------------------------------------------- */
+       ======================================================== */
+
+    /*
+       access()
+       Checks whether the required workspace directories
+       exist before starting the agents.
+    */
 
     if (access(WORKSPACE, F_OK) != 0 ||
         access(INPUT_DIR, F_OK) != 0 ||
         access(OUTPUT_DIR, F_OK) != 0 ||
         access(BACKUP_DIR, F_OK) != 0)
     {
-        printf("Required workspace directories are missing.\n");
+        printf("\nRequired workspace directories are missing.\n");
+
         printf("Please create the project directories first.\n");
 
         log_activity("Main Controller",
                      "Required workspace directories missing");
 
-        return 1;
+        return;
     }
 
-
-    /* --------------------------------------------------------
-       FILE VALIDATION
-       -------------------------------------------------------- */
 
     printf("\nChecking workspace file...\n");
 
-    if (validate_file("workspace/input/factorial.c"))
-    {
-        printf("Workspace file is available.\n");
-    }
-    else
+
+    if (!validate_file("workspace/input/factorial.c"))
     {
         printf("Workspace file is not available.\n");
 
-        return 1;
+        return;
     }
 
 
-    /* --------------------------------------------------------
-       CREATE CODE GENERATOR
-       -------------------------------------------------------- */
+    printf("Workspace file is available.\n");
+
+
+    /* ========================================================
+       CREATE CODE GENERATOR PROCESS
+       ======================================================== */
+
+    /*
+       fork()
+       Creates a separate process representing
+       the Code Generator Agent.
+    */
 
     pid_t generator_pid = fork();
+
 
     if (generator_pid < 0)
     {
         perror("Generator process creation failed");
-
-        return 1;
+        return;
     }
+
 
     if (generator_pid == 0)
     {
@@ -1166,18 +1541,24 @@ int main()
     }
 
 
-    /* --------------------------------------------------------
-       CREATE EXECUTION AGENT
-       -------------------------------------------------------- */
+    /* ========================================================
+       CREATE EXECUTION AGENT PROCESS
+       ======================================================== */
+
+    /*
+       fork()
+       Creates a separate Execution Agent process.
+    */
 
     pid_t execution_pid = fork();
+
 
     if (execution_pid < 0)
     {
         perror("Execution process creation failed");
-
-        return 1;
+        return;
     }
+
 
     if (execution_pid == 0)
     {
@@ -1185,18 +1566,24 @@ int main()
     }
 
 
-    /* --------------------------------------------------------
-       CREATE CODE REVIEW AGENT
-       -------------------------------------------------------- */
+    /* ========================================================
+       CREATE CODE REVIEW AGENT PROCESS
+       ======================================================== */
+
+    /*
+       fork()
+       Creates a separate Code Review Agent process.
+    */
 
     pid_t reviewer_pid = fork();
+
 
     if (reviewer_pid < 0)
     {
         perror("Review process creation failed");
-
-        return 1;
+        return;
     }
+
 
     if (reviewer_pid == 0)
     {
@@ -1204,18 +1591,24 @@ int main()
     }
 
 
-    /* --------------------------------------------------------
-       CREATE TESTING AGENT
-       -------------------------------------------------------- */
+    /* ========================================================
+       CREATE TESTING AGENT PROCESS
+       ======================================================== */
+
+    /*
+       fork()
+       Creates a separate Testing Agent process.
+    */
 
     pid_t tester_pid = fork();
+
 
     if (tester_pid < 0)
     {
         perror("Testing process creation failed");
-
-        return 1;
+        return;
     }
+
 
     if (tester_pid == 0)
     {
@@ -1223,16 +1616,22 @@ int main()
     }
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        RESOURCE MONITORING
-       -------------------------------------------------------- */
+       ======================================================== */
 
     monitor_process(execution_pid);
 
 
-    /* --------------------------------------------------------
+    /* ========================================================
        WAIT FOR ALL AGENTS
-       -------------------------------------------------------- */
+       ======================================================== */
+
+    /*
+       waitpid()
+       Makes the Main Controller wait for every
+       agent process to finish.
+    */
 
     waitpid(generator_pid, NULL, 0);
 
@@ -1243,16 +1642,261 @@ int main()
     waitpid(tester_pid, NULL, 0);
 
 
-    /* --------------------------------------------------------
-       FINAL MESSAGE
-       -------------------------------------------------------- */
-
     printf("\n========================================\n");
     printf("All AI Agents Completed Successfully!\n");
     printf("========================================\n");
 
+
     log_activity("Main Controller",
                  "All AI Agents completed");
+}
+
+
+/* ============================================================
+   VIEW ACTIVITY LOG
+   ============================================================ */
+
+void view_activity_log()
+{
+    printf("\n========================================\n");
+    printf("          ACTIVITY LOG\n");
+    printf("========================================\n");
+
+
+    /*
+       fopen()
+       Opens the activity log for reading.
+    */
+
+    FILE *file = fopen(LOG_FILE, "r");
+
+
+    if (file == NULL)
+    {
+        printf("No activity log found yet.\n");
+        return;
+    }
+
+
+    char line[500];
+
+
+    /*
+       fgets()
+       Reads and displays the log one line at a time.
+    */
+
+    while (fgets(line,
+                 sizeof(line),
+                 file))
+    {
+        printf("%s", line);
+    }
+
+
+    fclose(file);
+
+
+    printf("\n========================================\n");
+}
+
+
+/* ============================================================
+   VIEW BACKUP FILE
+   ============================================================ */
+
+void view_backup_file()
+{
+    printf("\n========================================\n");
+    printf("          BACKUP FILE\n");
+    printf("========================================\n");
+
+
+    /*
+       fopen()
+       Opens the backup copy for reading.
+    */
+
+    FILE *file =
+        fopen("workspace/backup/factorial.c.bak",
+              "r");
+
+
+    if (file == NULL)
+    {
+        printf("Backup file not found.\n");
+
+        printf("Run the Multi-Agent System first.\n");
+
+        return;
+    }
+
+
+    char line[500];
+
+
+    /*
+       fgets()
+       Reads the backup file line by line.
+    */
+
+    while (fgets(line,
+                 sizeof(line),
+                 file))
+    {
+        printf("%s", line);
+    }
+
+
+    fclose(file);
+
+
+    printf("\n========================================\n");
+}
+
+
+/* ============================================================
+   MENU
+   ============================================================ */
+
+void show_menu()
+{
+    printf("\n\n");
+
+    printf("========================================\n");
+    printf("   MULTI-AGENT AI EXECUTION SYSTEM\n");
+    printf("========================================\n");
+
+    printf("\n1. Run Multi-Agent System\n");
+    printf("2. View Activity Log\n");
+    printf("3. View Backup File\n");
+    printf("4. Exit\n");
+
+    printf("\nEnter your choice: ");
+}
+
+
+/* ============================================================
+   MAIN CONTROLLER
+   ============================================================ */
+
+int main()
+{
+    int choice;
+
+
+    printf("========================================\n");
+    printf("     MULTI-AGENT AI EXECUTION SYSTEM\n");
+    printf("========================================\n");
+
+    printf("\nMain Controller Started\n");
+
+
+    log_activity("Main Controller",
+                 "Main Controller started");
+
+
+    /* ========================================================
+       MENU LOOP
+       ======================================================== */
+
+    while (1)
+    {
+        show_menu();
+
+
+        /*
+           scanf()
+           Reads the user's menu choice.
+        */
+
+        if (scanf("%d", &choice) != 1)
+        {
+            printf("\nInvalid input. Please enter a number.\n");
+
+
+            /*
+               getchar()
+               Clears invalid input from the input buffer.
+            */
+
+            while (getchar() != '\n');
+
+            continue;
+        }
+
+
+        /*
+           switch()
+           Selects the requested menu operation.
+        */
+
+        switch (choice)
+        {
+            case 1:
+
+                /*
+                   Runs the complete multi-agent workflow.
+                */
+
+                run_multi_agent_system();
+
+                break;
+
+
+            case 2:
+
+                /*
+                   Displays automatically generated
+                   agent activity and execution logs.
+                */
+
+                view_activity_log();
+
+                break;
+
+
+            case 3:
+
+                /*
+                   Displays the backup copy of the
+                   workspace file.
+                */
+
+                view_backup_file();
+
+                break;
+
+
+            case 4:
+
+                printf("\n========================================\n");
+
+                printf("Exiting Multi-Agent AI Execution System...\n");
+
+                printf("========================================\n");
+
+
+                log_activity("Main Controller",
+                             "System exited");
+
+
+                /*
+                   return 0
+                   Terminates the Main Controller normally.
+                */
+
+                return 0;
+
+
+            default:
+
+                printf("\nInvalid choice.\n");
+
+                printf("Please select 1, 2, 3, or 4.\n");
+        }
+    }
+
 
     return 0;
 }
