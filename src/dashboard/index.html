@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AURA | Agent Control Center</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand-row" href="#overview">
+          <span class="brand-mark">A</span>
+          <span class="brand-name">AURA</span>
+        </a>
+        <div class="menu-block">
+          <div class="menu-title">Control center</div>
+          <nav class="menu-nav" aria-label="Main menu">
+            <button class="menu-item active" data-view="overview">Overview</button>
+            <button class="menu-item" data-view="live-flow">Live Flow</button>
+            <button class="menu-item" data-view="agents-work">Agents Work</button>
+          </nav>
+        </div>
+        <div class="brand-footer">
+          <div class="brand-small">AURA</div>
+          <div class="brand-sub">Multi-Agent C Program<br />Execution System</div>
+          <div class="status-line"><span class="dot"></span><span id="sidebar-status">Runtime ready</span></div>
+        </div>
+      </aside>
+
+      <div class="content-shell">
+        <header class="topbar">
+          <div class="topbar-left">
+            <div class="topbar-title">AURA</div>
+            <div class="topbar-subtitle">Autonomous Unified Runtime &amp; Agent Orchestration</div>
+          </div>
+          <nav class="topnav" aria-label="Views">
+            <button class="nav-btn active" data-view="overview">Overview</button>
+            <button class="nav-btn" data-view="live-flow">Live Flow</button>
+            <button class="nav-btn" data-view="agents-work">Agents Work</button>
+          </nav>
+          <div class="header-actions">
+            <div class="system-pill"><span class="dot"></span><span id="system-status-label">READY</span></div>
+            <button id="start-btn" class="top-btn success">Start</button>
+            <button id="pause-btn" class="top-btn warning" disabled>Pause</button>
+            <button id="stop-btn" class="top-btn danger" disabled>Stop</button>
+          </div>
+        </header>
+
+        <main class="dashboard-main">
+          <section id="overview-view" class="view-page">
+            <section class="overview-panel panel">
+              <div class="section-title-row">
+                <div>
+                  <p class="eyebrow">System architecture</p>
+                  <h1>Six components. One execution flow.</h1>
+                  <p class="muted-copy">The Orchestrator routes each request through four FIFO-connected C-program agents. The Monitor observes the run and records its health.</p>
+                </div>
+                <div class="overview-counts">
+                  <div class="count-card"><span>Worker agents</span><strong>4</strong></div>
+                  <div class="count-card"><span>Controllers</span><strong>2</strong></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="architecture-panel panel">
+              <div class="panel-heading"><h2>FIFO execution architecture</h2><span class="architecture-label">Real named pipes · Linux runtime</span></div>
+              <div class="architecture-flow">
+                <article class="flow-card controller-card">
+                  <span class="role-label">CONTROLLER</span>
+                  <h3>Orchestrator</h3>
+                  <p>Accepts a program request, assigns a run ID, and routes the task.</p>
+                  <div class="card-state" id="overview-orchestrator-state">READY</div>
+                </article>
+                <div class="fifo-connector"><span>FIFO</span><strong>REQUEST</strong><b>→</b></div>
+                <article class="flow-card generator-card">
+                  <span class="role-label">AGENT 01</span>
+                  <h3>Generator</h3>
+                  <p>Selects or writes the C source and saves it in the run workspace.</p>
+                  <div class="card-state" id="overview-generator-state">IDLE</div>
+                </article>
+                <div class="fifo-connector"><span>FIFO</span><strong>SOURCE_READY</strong><b>→</b></div>
+                <article class="flow-card executor-card">
+                  <span class="role-label">AGENT 02</span>
+                  <h3>Executor</h3>
+                  <p>Compiles with GCC, runs the binary, and captures output and errors.</p>
+                  <div class="card-state" id="overview-executor-state">IDLE</div>
+                </article>
+                <div class="fifo-connector"><span>FIFO</span><strong>EXECUTION_RESULT</strong><b>→</b></div>
+                <article class="flow-card reviewer-card">
+                  <span class="role-label">AGENT 03</span>
+                  <h3>Reviewer</h3>
+                  <p>Locks the source file, creates a backup, reviews the build, then releases the lock.</p>
+                  <div class="card-state" id="overview-reviewer-state">IDLE</div>
+                </article>
+                <div class="fifo-connector"><span>FIFO</span><strong>REVIEW_RESULT</strong><b>→</b></div>
+                <article class="flow-card tester-card">
+                  <span class="role-label">AGENT 04</span>
+                  <h3>Tester</h3>
+                  <p>Compares the captured output with the expected result.</p>
+                  <div class="card-state" id="overview-tester-state">IDLE</div>
+                </article>
+              </div>
+              <div class="monitor-controller">
+                <span class="role-label">CONTROLLER · OBSERVABILITY</span>
+                <strong>Monitor</strong>
+                <span>Tracks agent PIDs, run state, FIFO events, and backup health.</span>
+                <span class="card-state" id="overview-monitor-state">READY</span>
+              </div>
+            </section>
+
+            <section class="overview-bottom">
+              <div class="panel info-panel">
+                <div class="panel-heading"><h2>Agent responsibilities</h2></div>
+                <div class="responsibility-grid">
+                  <div><strong>Generator</strong><span>Program logic → saved C source</span></div>
+                  <div><strong>Executor</strong><span>gcc compile → binary execution</span></div>
+                  <div><strong>Reviewer</strong><span>Exclusive file lock → source backup → review</span></div>
+                  <div><strong>Tester</strong><span>Expected output ↔ actual output</span></div>
+                </div>
+              </div>
+              <div class="panel overview-cta">
+                <p class="eyebrow">Ready to run?</p>
+                <h2>Submit a C program request</h2>
+                <p class="muted-copy">Choose one of 15 built-in programs or provide your own C source.</p>
+                <button class="primary-btn" data-open-view="agents-work">Open Agents Work →</button>
+              </div>
+            </section>
+          </section>
+
+          <section id="live-flow-view" class="view-page hidden">
+            <section class="page-intro panel">
+              <p class="eyebrow">Run observability</p>
+              <h1>Live Flow</h1>
+              <p class="muted-copy">Follow every FIFO handoff and agent event for the selected run.</p>
+              <div class="run-meta">
+                <span>Run ID <strong id="flow-run-id">—</strong></span>
+                <span>Program <strong id="flow-program">—</strong></span>
+                <span>Phase <strong id="flow-phase">READY</strong></span>
+                <span>Workspace <strong id="flow-workspace">/tmp/aura_runtime_workspace</strong></span>
+              </div>
+            </section>
+            <section class="panel flow-panel">
+              <div class="panel-heading"><h2>Agent pipeline</h2><span class="architecture-label" id="ipc-health">FIFO channels ready</span></div>
+              <div id="live-agent-flow" class="live-agent-flow"></div>
+            </section>
+            <section class="panel timeline-panel">
+              <div class="timeline-heading">
+                <div>
+                  <h2>Live Event Timeline</h2>
+                  <p>Detailed event-by-event record of the runtime and task flow.</p>
+                </div>
+                <div class="timeline-heading-meta">
+                  <span id="timeline-count">Waiting for events</span>
+                  <time id="timeline-clock">—</time>
+                </div>
+              </div>
+              <ol id="event-stream" class="event-stream"></ol>
+            </section>
+          </section>
+
+          <section id="agents-work-view" class="view-page hidden">
+            <section class="page-intro panel">
+              <p class="eyebrow">Program execution workspace</p>
+              <h1>Agents Work</h1>
+              <p class="muted-copy">Enter a program request or select a built-in C example. The full six-component pipeline starts when you press Start.</p>
+            </section>
+
+            <section class="panel request-panel">
+              <div class="panel-heading"><h2>New program run</h2><span class="language-chip">C · GCC</span></div>
+              <label for="program-input">Program request</label>
+              <div class="request-row">
+                <input id="program-input" type="text" placeholder="e.g. factorial of 5, fibonacci 10, check if 17 is prime" autocomplete="off" />
+                <button id="start-run-btn" class="primary-btn">Start run</button>
+              </div>
+              <div class="catalog-heading"><span>Built-in C programs</span><span>Choose a sample to fill the request</span></div>
+              <div id="program-catalog" class="catalog-grid"></div>
+              <details class="custom-source">
+                <summary>Run custom C source instead</summary>
+                <label for="source-input">C source code</label>
+                <textarea id="source-input" rows="10" spellcheck="false" placeholder="#include &lt;stdio.h&gt;&#10;int main(void) {&#10;    printf(&quot;Hello, AURA!\\n&quot;);&#10;    return 0;&#10;}"></textarea>
+                <label for="expected-input">Expected output (required for custom source)</label>
+                <textarea id="expected-input" rows="3" placeholder="Hello, AURA!"></textarea>
+                <p class="warning-copy">Custom C source is compiled and executed locally. Only run source you trust.</p>
+              </details>
+              <div class="run-controls">
+                <button id="pause-run-btn" class="top-btn warning" disabled>Pause</button>
+                <button id="stop-run-btn" class="top-btn danger" disabled>Stop</button>
+                <span id="request-feedback" role="status">Select a program to begin.</span>
+              </div>
+            </section>
+
+            <div class="run-summary panel">
+              <div><span>Run ID</span><strong id="run-id">—</strong></div>
+              <div><span>Request</span><strong id="run-request">Waiting for a program</strong></div>
+              <div><span>Overall status</span><strong id="run-status">READY</strong></div>
+              <div><span>Monitor</span><strong id="run-monitor">Waiting</strong></div>
+            </div>
+
+            <section class="agent-work-grid" aria-label="Live agent work">
+              <article class="work-card orchestrator-work" data-agent="Orchestrator">
+                <header><div><span class="role-label">CONTROLLER</span><h2>Orchestrator</h2></div><span class="agent-status">READY</span></header>
+                <dl class="agent-details"></dl>
+                <div class="work-detail"></div>
+              </article>
+              <article class="work-card generator-work" data-agent="Generator">
+                <header><div><span class="role-label">AGENT 01</span><h2>Generator</h2></div><span class="agent-status">IDLE</span></header>
+                <dl class="agent-details"></dl>
+                <div class="work-detail"></div>
+                <pre class="code-output">Generated C source will appear here.</pre>
+              </article>
+              <article class="work-card executor-work" data-agent="Executor">
+                <header><div><span class="role-label">AGENT 02</span><h2>Executor</h2></div><span class="agent-status">IDLE</span></header>
+                <dl class="agent-details"></dl>
+                <div class="work-detail"></div>
+                <pre class="terminal-output">Compiler command and program output will appear here.</pre>
+              </article>
+              <article class="work-card reviewer-work" data-agent="Reviewer">
+                <header><div><span class="role-label">AGENT 03</span><h2>Reviewer</h2></div><span class="agent-status">IDLE</span></header>
+                <dl class="agent-details"></dl>
+                <div class="work-detail"></div>
+              </article>
+              <article class="work-card tester-work" data-agent="Tester">
+                <header><div><span class="role-label">AGENT 04</span><h2>Tester</h2></div><span class="agent-status">IDLE</span></header>
+                <dl class="agent-details"></dl>
+                <div class="work-detail"></div>
+                <div class="comparison-grid">
+                  <div><span>Expected output</span><pre id="expected-display">—</pre></div>
+                  <div><span>Actual output</span><pre id="actual-display">—</pre></div>
+                </div>
+              </article>
+              <article class="work-card monitor-work" data-agent="Monitor">
+                <header><div><span class="role-label">CONTROLLER</span><h2>Monitor</h2></div><span class="agent-status">READY</span></header>
+                <dl class="agent-details"></dl>
+                <div class="work-detail"></div>
+              </article>
+            </section>
+          </section>
+        </main>
+      </div>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
